@@ -30,6 +30,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
@@ -54,6 +55,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -408,15 +410,27 @@ async function persistProviderAuthResult(params: {
   prompter: WizardPrompter;
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<ProviderAuthResult["profiles"]> {
   const defaultModel = params.result.defaultModel
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
   const persistedProfiles: ProviderAuthResult["profiles"] = [];
-  const shouldUpdateConfig = Boolean(
-    params.result.configPatch || (params.setDefault && defaultModel),
-  );
+  const configPatch = params.result.configPatch
+    ? createMergePatch(
+        params.config,
+        applyProviderAuthConfigPatch(params.config, params.result.configPatch, {
+          replaceDefaultModels: params.result.replaceDefaultModels,
+        }),
+      )
+    : undefined;
+  const shouldUpdateConfig =
+    (isRecord(configPatch) && Object.keys(configPatch).length > 0) ||
+    Boolean(params.setDefault && defaultModel);
+  if (profiles.length > 0 || shouldUpdateConfig) {
+    await params.beforePersistentEffect?.();
+  }
 
   for (const candidate of profiles) {
     const persisted = await persistProviderAuthProfilesAfterLogin({
@@ -436,17 +450,14 @@ async function persistProviderAuthResult(params: {
     });
   }
 
-  // Auth login owns the credential store. Keep openclaw.json untouched unless
-  // the provider explicitly returns a config patch or the user opts into a
-  // default-model write.
+  // Replay only the login's changes; the writer may have newer unrelated settings.
   if (shouldUpdateConfig) {
     const updated = await updateConfig((cfg) => {
       const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
       let next = cfg;
-      if (params.result.configPatch) {
-        next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
-          replaceDefaultModels: params.result.replaceDefaultModels,
-        });
+      if (configPatch) {
+        // SAFETY: The patch derives from typed config; updateConfig validates the merged value before writing.
+        next = applyMergePatch(next, configPatch) as OpenClawConfig;
       }
       next = restorePriorAgentsDefaultsModelUnlessOptIn({
         cfg: next,
@@ -457,6 +468,14 @@ async function persistProviderAuthResult(params: {
         next = applyDefaultModel(next, defaultModel);
       }
       return next;
+    }).catch((error: unknown) => {
+      if (persistedProfiles.length === 0) {
+        throw error;
+      }
+      throw new Error(
+        `Credentials saved, but provider settings could not be applied: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     });
     if (defaultModel) {
       const repaired = await repairCodexRuntimePluginInstallForModelSelection({
@@ -474,7 +493,7 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
-  await refreshRunningGatewayAuthState(params.agentId, params.runtime);
+  await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
 
   for (const profile of persistedProfiles) {
     params.runtime.log(
@@ -555,6 +574,7 @@ async function runProviderAuthMethod(params: {
   isRemote?: boolean;
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
   params.signal?.throwIfAborted();
   const result = await params.method.run({
@@ -593,8 +613,8 @@ async function runProviderAuthMethod(params: {
     prompter: params.prompter,
     setDefault: params.setDefault,
     env: params.env ?? process.env,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
-
   return { result, profiles: persistedProfiles };
 }
 
@@ -715,7 +735,7 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
-  await refreshRunningGatewayAuthState(agentId, runtime);
+  await refreshRunningGatewayAuthState(agentId, "login", runtime);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
@@ -775,7 +795,7 @@ export async function modelsAuthPasteApiKeyCommand(
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
 
-  await refreshRunningGatewayAuthState(agentId, runtime);
+  await refreshRunningGatewayAuthState(agentId, "login", runtime);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
@@ -1073,7 +1093,7 @@ export async function runModelsAuthLoginFlowCore(
       provider: imported.provider,
       profileId: imported.profileId,
     });
-    await refreshRunningGatewayAuthState(context.agentId, opts.runtime);
+    await refreshRunningGatewayAuthState(context.agentId, "login", opts.runtime);
     if (imported.configUpdated) {
       logConfigUpdated(opts.runtime);
     }
@@ -1091,6 +1111,7 @@ export async function runModelsAuthLoginFlowCore(
   }
 
   if (opts.force) {
+    await opts.beforePersistentEffect?.();
     // Purge existing profiles for this provider only after we have a valid
     // auth method to invoke. Running the purge earlier (before method
     // resolution) would delete the user's working credentials and then
@@ -1120,7 +1141,7 @@ export async function runModelsAuthLoginFlowCore(
         { cause: err },
       );
     }
-    await refreshRunningGatewayAuthState(context.agentId, opts.runtime);
+    await refreshRunningGatewayAuthState(context.agentId, "logout", opts.runtime);
   }
 
   const { result, profiles } = await runProviderAuthMethod({
@@ -1138,6 +1159,7 @@ export async function runModelsAuthLoginFlowCore(
     isRemote: opts.isRemote,
     signal: opts.signal,
     openUrl: opts.openUrl,
+    beforePersistentEffect: opts.beforePersistentEffect,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);
   return {

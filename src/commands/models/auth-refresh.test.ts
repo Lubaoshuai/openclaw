@@ -21,6 +21,25 @@ describe("refreshRunningGatewayAuthState", () => {
     mocks.isImplicitLocalGatewayTarget.mockResolvedValue(true);
   });
 
+  it.each(["login", "logout", "update"] as const)(
+    "acknowledges a published %s",
+    async (operation) => {
+      mocks.callGateway.mockResolvedValueOnce({ refreshed: true });
+      const warn = vi.fn();
+      await expect(
+        refreshRunningGatewayAuthState("main", operation, { error: warn }),
+      ).resolves.toBe("refreshed");
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "models.authRefresh",
+          params: { operation, agentId: "main" },
+          requireLocalBackendSharedAuth: true,
+        }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
   it("stays silent when no gateway is listening", async () => {
     mocks.callGateway.mockRejectedValueOnce(
       new GatewayTransportError({
@@ -36,7 +55,9 @@ describe("refreshRunningGatewayAuthState", () => {
     );
     const warn = vi.fn();
 
-    await expect(refreshRunningGatewayAuthState("main", { error: warn })).resolves.toBeUndefined();
+    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+      "gateway-unreachable",
+    );
 
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ requireLocalBackendSharedAuth: true }),
@@ -51,7 +72,9 @@ describe("refreshRunningGatewayAuthState", () => {
     });
     const warn = vi.fn();
 
-    await expect(refreshRunningGatewayAuthState("main", { error: warn })).resolves.toBeUndefined();
+    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+      "gateway-rejected",
+    );
 
     expect(warn).toHaveBeenCalledWith(
       "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
@@ -61,16 +84,13 @@ describe("refreshRunningGatewayAuthState", () => {
   it("warns when the gateway cannot publish refreshed auth state", async () => {
     mocks.callGateway.mockImplementationOnce(async (options: { onHelloOk?: () => void }) => {
       options.onHelloOk?.();
-      return {
-        unavailable: {
-          code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
-          message: "replacement unavailable",
-        },
-      };
+      return { refreshed: false };
     });
     const warn = vi.fn();
 
-    await expect(refreshRunningGatewayAuthState("main", { error: warn })).resolves.toBeUndefined();
+    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+      "gateway-rejected",
+    );
 
     expect(warn).toHaveBeenCalledWith(
       "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
@@ -86,7 +106,9 @@ describe("refreshRunningGatewayAuthState", () => {
     );
     const warn = vi.fn();
 
-    await expect(refreshRunningGatewayAuthState("main", { error: warn })).resolves.toBeUndefined();
+    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+      "gateway-rejected",
+    );
 
     expect(warn).toHaveBeenCalledWith(
       "Warning: Model auth changes were saved on this host, but the configured Gateway does not share this auth state. Run the auth command on the Gateway host (the far end of any SSH tunnel).",
@@ -97,7 +119,9 @@ describe("refreshRunningGatewayAuthState", () => {
     mocks.isImplicitLocalGatewayTarget.mockRejectedValueOnce(new Error("invalid config"));
     const warn = vi.fn();
 
-    await expect(refreshRunningGatewayAuthState("main", { error: warn })).resolves.toBeUndefined();
+    await expect(refreshRunningGatewayAuthState("main", "login", { error: warn })).resolves.toBe(
+      "gateway-unreachable",
+    );
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(

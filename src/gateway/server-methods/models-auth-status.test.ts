@@ -144,9 +144,9 @@ vi.mock("../server-model-catalog-auth.js", () => ({
 }));
 
 import { modelsAuthOrderHandlers } from "./models-auth-order.js";
+import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import {
   aggregateRefreshableAuthStatus,
-  invalidateModelAuthStatusCache,
   modelsAuthStatusHandlers,
   type ModelAuthLogoutResult,
   type ModelAuthStatusResult,
@@ -319,7 +319,7 @@ function resetAuthStatusMocks(): void {
   }
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.clearAllMocks();
-  invalidateModelAuthStatusCache();
+  clearModelAuthStatusUsageCache();
   mocks.getRuntimeConfig.mockReturnValue({});
   mocks.listAgentIds.mockReturnValue(["main"]);
   mocks.resolveAgentDir.mockImplementation((_cfg: unknown, agentId: string) =>
@@ -1568,13 +1568,6 @@ describe("models.authStatus", () => {
     expect(error?.message).toContain("refresh failed");
   });
 
-  it("invalidateModelAuthStatusCache() preserves fresh auth reads", async () => {
-    await handler(createOptions());
-    invalidateModelAuthStatusCache();
-    await handler(createOptions());
-    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-  });
-
   it("does not publish usage captured before a concurrent logout", async () => {
     let releaseUsage: (() => void) | undefined;
     let usageFinished = false;
@@ -2342,7 +2335,6 @@ describe("models.authOrderSet", () => {
     expect(mocks.prepareModelRuntimeSnapshot).toHaveBeenCalledWith({
       agentId: "main",
       agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
       config: {},
     });
 

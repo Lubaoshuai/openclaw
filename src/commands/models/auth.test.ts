@@ -449,7 +449,7 @@ describe("modelsAuthLoginCommand", () => {
       }),
     ]);
     mocks.callGateway.mockReset();
-    mocks.callGateway.mockResolvedValue({});
+    mocks.callGateway.mockResolvedValue({ refreshed: true });
   });
 
   afterEach(() => {
@@ -506,7 +506,7 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "main" },
+        params: { operation: "login", agentId: "main" },
       }),
     );
   });
@@ -614,7 +614,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "main" },
+        params: { operation: "login", agentId: "main" },
       }),
     );
     expect(runtime.error).toHaveBeenCalledWith(
@@ -906,7 +906,7 @@ describe("modelsAuthLoginCommand", () => {
     ).toBe("/tmp/openclaw/agents/coder");
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "coder" },
+        params: { operation: "login", agentId: "coder" },
       }),
     );
   });
@@ -925,6 +925,33 @@ describe("modelsAuthLoginCommand", () => {
     });
 
     expect((readMockCallArg(runProviderAuth) as AuthRunCall).signal).toBe(abortController.signal);
+  });
+
+  it("refreshes saved credentials before presenting provider notes", async () => {
+    const note = vi.fn(async (_message: string, title?: string) => {
+      if (title === "Provider notes") {
+        throw new Error("note delivery failed");
+      }
+    });
+    mocks.createClackPrompter.mockReturnValue({ note, select: vi.fn() });
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai:proof",
+          credential: { type: "token", provider: "openai", token: "fixture-token" },
+        },
+      ],
+      notes: ["Provider sign-in details"],
+    });
+    await expect(modelsAuthLoginCommand({ provider: "openai" }, createRuntime())).rejects.toThrow(
+      "note delivery failed",
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "models.authRefresh",
+        params: { operation: "login", agentId: "main" },
+      }),
+    );
   });
 
   it("does not persist credentials returned after app-owned cancellation", async () => {
@@ -1163,7 +1190,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
-    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
+    expect(currentConfig.agents?.defaults?.models).toEqual(existingModels);
   });
 
   it.each([
@@ -1496,7 +1523,7 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "main" },
+        params: { operation: "login", agentId: "main" },
       }),
     );
   });
@@ -1546,7 +1573,7 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "coder" },
+        params: { operation: "login", agentId: "coder" },
       }),
     );
   });
@@ -1659,7 +1686,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { refresh: true, agentId: "coder" },
+        params: { operation: "login", agentId: "coder" },
       }),
     );
   });
