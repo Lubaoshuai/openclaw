@@ -455,6 +455,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         readConfigFileSnapshot({
+          observe: false,
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
         }),
