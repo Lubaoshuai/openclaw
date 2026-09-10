@@ -141,6 +141,43 @@ the Gateway already runs inside a managed Google Cloud environment.
     should use `google/*` model refs plus the explicit runtime selection above.
 
   </Tab>
+
+  <Tab title="Vertex AI (google-vertex)">
+    **For Gateways already running inside Google Cloud:** `google-vertex` uses
+    Application Default Credentials (ADC), so the metadata server or
+    `gcloud auth application-default login` supplies the token and OpenClaw
+    refreshes it on its own.
+
+    <Steps>
+      <Step title="Store the Vertex credential marker">
+        The ADC path is selected by a literal credential value. Paste exactly
+        `gcp-vertex-credentials` — this is a sentinel, not a secret:
+
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+
+        Any other stored value — including a real token from
+        `gcloud auth print-access-token` — is sent as `x-goog-api-key` and
+        rejected by Vertex with `401 UNAUTHENTICATED`.
+      </Step>
+      <Step title="Set the project and location">
+        `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`
+        must be set in the Gateway service environment. Without a project the
+        run fails earlier with `Vertex AI requires a project ID`.
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider google-vertex
+        ```
+      </Step>
+    </Steps>
+
+    Vertex uses its own static model catalog; it does not refresh from the
+    Gemini `models.list` API.
+
+  </Tab>
 </Tabs>
 
 <Note>
