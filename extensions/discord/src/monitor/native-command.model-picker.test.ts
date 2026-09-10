@@ -7,7 +7,6 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
-  ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
@@ -90,7 +89,7 @@ function createResolvedAgentRoute(overrides: Partial<ResolvedAgentRoute> = {}): 
   };
 }
 
-function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
+function createModelsProviderData(entries: Record<string, string[]>) {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
 }
 
@@ -154,7 +153,7 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
   return interaction;
 }
 
-function createDefaultModelPickerData(): ModelsProviderData {
+function createDefaultModelPickerData() {
   return createModelsProviderData({
     openai: ["gpt-4.1", "gpt-4o"],
     anthropic: ["claude-sonnet-4-5"],

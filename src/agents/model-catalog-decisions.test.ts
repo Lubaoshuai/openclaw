@@ -107,7 +107,7 @@ describe("captured model decisions", () => {
         });
         expect(choices).toContain("copilot");
       } else {
-        expect(choices).not.toContain("copilot");
+        expect(choices).toBeUndefined();
       }
     },
   );
@@ -173,7 +173,7 @@ describe("captured model decisions", () => {
     ).toEqual({ id: "openclaw", source: "model" });
   });
 
-  it("keeps ordinary host authentication on its selected host route", async () => {
+  it("keeps ordinary host authentication distinct from native login", async () => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
@@ -190,6 +190,8 @@ describe("captured model decisions", () => {
     const evaluation = await owner.evaluateEntry(entry);
     expect(evaluation.availability).toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
+    expect(evaluation.selectedRoute).toMatchObject(platformRoute);
+    expect(evaluation.selectedAuthMode).toBe("api_key");
     expect(
       resolveCatalogDecisionRuntime({
         cfg,
@@ -198,7 +200,7 @@ describe("captured model decisions", () => {
         evaluation,
         pluginRegistry: owner.pluginRegistry,
       }),
-    ).toEqual({ id: "openclaw", source: "implicit" });
+    ).toEqual({ id: "codex", source: "implicit" });
   });
 
   it("offers only the native runtime when no host credential exists", async () => {
