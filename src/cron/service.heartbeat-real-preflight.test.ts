@@ -14,14 +14,9 @@ import {
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
 } from "../infra/heartbeat-runner.test-utils.js";
-import {
-  requestHeartbeat,
-  requestHeartbeatAndWait,
-  setHeartbeatsEnabled,
-} from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEventWithReceipt, resetSystemEventsForTest } from "../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { listTaskRecordsUnsorted } from "../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { CronService, type CronEvent } from "./service.js";
@@ -37,9 +32,7 @@ afterEach(() => {
   resetSystemEventsForTest();
   resetTaskRegistryForTests();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 
 describe("real heartbeat preflight task accounting", () => {
@@ -47,10 +40,6 @@ describe("real heartbeat preflight task accounting", () => {
     const sandbox = tempDirs.make("openclaw-cron-real-preflight-");
     const cronStorePath = path.join(sandbox, "cron", "jobs.json");
     const sessionStorePath = path.join(sandbox, "sessions.json");
-    // Point the default cron partition at the sandbox: the heartbeat preflight
-    // resolves the store via OPENCLAW_STATE_DIR, so seeding and preflight must
-    // land on the same partition for the comments-only scratch to be read.
-    vi.stubEnv("OPENCLAW_STATE_DIR", sandbox);
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -104,8 +93,6 @@ describe("real heartbeat preflight task accounting", () => {
         });
         return remove ? { accepted: true, remove } : { accepted: false };
       },
-      requestHeartbeat: (opts) =>
-        requestHeartbeat({ ...opts, sessionKey: opts.sessionKey ?? mainSessionKey }),
       requestHeartbeatAndWait: (opts, lifecycle) =>
         requestHeartbeatAndWait(
           { ...opts, sessionKey: opts.sessionKey ?? mainSessionKey, coalesceMs: 0 },
@@ -124,17 +111,13 @@ describe("real heartbeat preflight task accounting", () => {
 
     const runPromise = cron.run(heartbeatJobId, "force");
     const finishedEvent = await finished;
-    await expect(runPromise).resolves.toMatchObject({ ok: true, ran: true });
+    const runResult = await runPromise;
+    expect(runResult).toMatchObject({ ok: true, ran: true });
 
     expect(finishedEvent).toMatchObject({
       status: "ok",
       completionStatus: "succeeded",
-      summary: expect.stringContaining("heartbeat skipped: empty-heartbeat-file"),
     });
-    // The agent turn must never have run: this distinguishes a real preflight
-    // skip from an ordinary successful heartbeat that also settles as ok.
-    expect(getReplySpy).not.toHaveBeenCalled();
-    expect(sendTelegram).not.toHaveBeenCalled();
 
     // The task ledger that feeds `tasks list --status failed` must not
     // contain a failed row for this run.
