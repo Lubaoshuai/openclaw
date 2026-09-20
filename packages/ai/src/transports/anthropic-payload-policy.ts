@@ -260,8 +260,6 @@ function applyAnthropicCacheControlToSystem(
   }
 
   const normalizedBlocks: Array<unknown> = [];
-  const unsplitTextRecords: Array<Record<string, unknown>> = [];
-  let splitCount = 0;
   for (const block of system) {
     if (!block || typeof block !== "object") {
       normalizedBlocks.push(block);
@@ -279,11 +277,12 @@ function applyAnthropicCacheControlToSystem(
     record.text = text;
     const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
-      unsplitTextRecords.push(record);
+      if (record.cache_control === undefined) {
+        record.cache_control = cacheControl;
+      }
       normalizedBlocks.push(record);
       continue;
     }
-    splitCount++;
 
     const { cache_control: existingCacheControl, ...rest } = record;
     if (split.stablePrefix) {
@@ -298,17 +297,6 @@ function applyAnthropicCacheControlToSystem(
         ...rest,
         text: split.dynamicSuffix,
       });
-    }
-  }
-
-  // Anthropic prefix-caches everything up to a breakpoint, so header blocks that
-  // precede a stable-prefix split are covered by the split's own marker and must
-  // not burn one of the four cache_control breakpoints. When no block splits,
-  // anchor the system once on its last text block.
-  if (splitCount === 0) {
-    const lastRecord = unsplitTextRecords.at(-1);
-    if (lastRecord && lastRecord.cache_control === undefined) {
-      lastRecord.cache_control = cacheControl;
     }
   }
 
@@ -343,6 +331,7 @@ function applyAnthropicCacheControlToMessages(
   }
 
   let fallbackToolResult: Record<string, unknown> | undefined;
+  let markersPlaced = 0;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -357,21 +346,23 @@ function applyAnthropicCacheControlToMessages(
 
     const content = record.content;
     if (typeof content === "string") {
-      if (fallbackToolResult && markerLimit === 1) {
+      if (markersPlaced === 0 && fallbackToolResult && markerLimit === 1) {
+        // A single marker caches the longer-lived tool-output prefix instead
+        // of the newest (and most volatile) user turn.
         fallbackToolResult.cache_control = cacheControl;
         return;
       }
-      record.content = [
-        {
-          type: "text",
-          text: content,
-          cache_control: cacheControl,
-        },
-      ];
-      if (fallbackToolResult && markerLimit > 1) {
-        fallbackToolResult.cache_control = cacheControl;
+      if (markersPlaced < markerLimit) {
+        record.content = [
+          {
+            type: "text",
+            text: content,
+            cache_control: cacheControl,
+          },
+        ];
+        markersPlaced += 1;
       }
-      return;
+      continue;
     }
 
     if (!Array.isArray(content)) {
@@ -386,23 +377,28 @@ function applyAnthropicCacheControlToMessages(
 
       const blockRecord = block as Record<string, unknown>;
       if (blockRecord.type === "text" || blockRecord.type === "image") {
-        if (fallbackToolResult && markerLimit === 1) {
+        if (markersPlaced === 0 && fallbackToolResult && markerLimit === 1) {
+          // A single marker caches the longer-lived tool-output prefix.
           fallbackToolResult.cache_control = cacheControl;
           return;
         }
-        blockRecord.cache_control = cacheControl;
-        if (fallbackToolResult && markerLimit > 1) {
-          fallbackToolResult.cache_control = cacheControl;
+        if (markersPlaced < markerLimit) {
+          blockRecord.cache_control = cacheControl;
+          markersPlaced += 1;
         }
-        return;
+        break;
       }
       if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
         fallbackToolResult = blockRecord;
       }
     }
+
+    if (markersPlaced >= markerLimit) {
+      break;
+    }
   }
 
-  if (fallbackToolResult) {
+  if (fallbackToolResult && markersPlaced < markerLimit) {
     fallbackToolResult.cache_control = cacheControl;
   }
 }

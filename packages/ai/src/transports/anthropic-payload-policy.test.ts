@@ -120,58 +120,63 @@ describe("Anthropic tool-clearing policy", () => {
   });
 });
 
-describe("applyAnthropicPayloadPolicyToParams system breakpoints", () => {
-  const cacheControl = { type: "ephemeral" } as const;
-  const policy = {
-    allowsServiceTier: false,
-    cacheControl,
-    compactThreshold: 50_000,
-    serviceTier: undefined,
-    useServerCompaction: false,
-  } as const;
-  const optOutIndexes = new Set<number>();
+describe("applyAnthropicPayloadPolicyToParams message anchors", () => {
+  const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
 
-  it("spends one system breakpoint when the OAuth preamble precedes a stable-prefix split", () => {
-    const payload = {
-      system: [
-        {
-          type: "text",
-          text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
-        },
-        { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-        {
-          type: "text",
-          text: "Stable identity prompt.\n<!-- OPENCLAW_CACHE_BOUNDARY -->\nDynamic runtime facts.",
-        },
-      ],
+  function historyPayload(): Record<string, unknown> {
+    return {
+      system: [{ type: "text", text: "Stable system prompt." }],
       tools: [],
-      messages: [{ role: "user", content: "hi" }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Earlier stable question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Answer." }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }] },
+        { role: "assistant", content: [{ type: "text", text: "Analyzing." }] },
+        { role: "user", content: [{ type: "text", text: "Volatile latest question." }] },
+      ],
     };
+  }
 
-    applyAnthropicPayloadPolicyToParams(payload, policy, optOutIndexes);
+  function markerAt(message: unknown): unknown {
+    const content = (message as { content: Array<Record<string, unknown>> }).content;
+    return (content[0] as { cache_control?: unknown }).cache_control;
+  }
 
-    const system = payload.system as Array<Record<string, unknown>>;
-    const marked = system.filter((block) => block.cache_control);
-    expect(marked).toHaveLength(1);
-    expect(marked[0]?.text).toBe("Stable identity prompt.");
+  it("anchors the previous user turn before the latest tool result when budget remains", () => {
+    const payload = historyPayload();
+    applyAnthropicPayloadPolicyToParams(
+      payload,
+      resolveAnthropicPayloadPolicy({ ...model, cacheRetention: "short", enableCacheControl: true }),
+      new Set(),
+    );
+
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    // system: 1 marker; history budget: 3 -> previous user turn, latest tool
+    // result, newest user turn (issue #147168: a reshaped newest message must
+    // not invalidate the whole cached history).
+    expect(markerAt(messages[0])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[4])).toEqual({ type: "ephemeral" });
   });
 
-  it("anchors a fully unsplit system on its last text block only", () => {
+  it("keeps the tool-result-only fallback when a single history marker remains", () => {
     const payload = {
-      system: [
-        { type: "text", text: "header one" },
-        { type: "text", text: "header two" },
-        { type: "text", text: "stable prompt" },
+      system: [{ type: "text", text: "Stable system prompt one." }, { type: "text", text: "Stable system prompt two." }],
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Investigate the cache writes." }] },
+        { role: "assistant", content: [{ type: "text", text: "I'll inspect the logs." }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }] },
       ],
-      tools: [],
-      messages: [{ role: "user", content: "hi" }],
     };
+    applyAnthropicPayloadPolicyToParams(
+      payload,
+      resolveAnthropicPayloadPolicy({ ...model, cacheRetention: "short", enableCacheControl: true }),
+      new Set(),
+    );
 
-    applyAnthropicPayloadPolicyToParams(payload, policy, optOutIndexes);
-
-    const system = payload.system as Array<Record<string, unknown>>;
-    const marked = system.filter((block) => block.cache_control);
-    expect(marked).toHaveLength(1);
-    expect(marked[0]?.text).toBe("stable prompt");
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(markerAt(messages[0])).toBeUndefined();
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
   });
 });
