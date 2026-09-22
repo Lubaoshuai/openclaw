@@ -539,14 +539,28 @@ it("anchors history on the newest and previous user turns when the marker budget
   // longer rewrites the whole cached history (issue #147168).
   expect(payload.messages[0]).toEqual({
     role: "user",
-    content: [{ type: "text", text: "Earlier stable question.", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    content: [
+      {
+        type: "text",
+        text: "Earlier stable question.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
   });
   expect(payload.messages[2]).toEqual({
     role: "user",
-    content: [{ type: "text", text: "Follow-up detail.", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    content: [
+      { type: "text", text: "Follow-up detail.", cache_control: { type: "ephemeral", ttl: "1h" } },
+    ],
   });
   expect(payload.messages[4]).toEqual({
     role: "user",
-    content: [{ type: "text", text: "Volatile latest question.", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    content: [
+      {
+        type: "text",
+        text: "Volatile latest question.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
   });
 });

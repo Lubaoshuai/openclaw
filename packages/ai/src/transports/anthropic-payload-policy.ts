@@ -319,6 +319,40 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
+/** Latest tool_result block in history; the advancing tool-loop cache anchor. */
+function findTrailingToolResult(
+  messages: ReadonlyArray<unknown>,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
+): Record<string, unknown> | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
+      continue;
+    }
+
+    if (!Array.isArray(record.content)) {
+      continue;
+    }
+
+    for (let j = record.content.length - 1; j >= 0; j--) {
+      const block = record.content[j];
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as Record<string, unknown>).type === "tool_result"
+      ) {
+        return block as Record<string, unknown>;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Apply one shared deepest-stable-message cache breakpoint policy. */
 function applyAnthropicCacheControlToMessages(
   messages: unknown,
@@ -330,7 +364,21 @@ function applyAnthropicCacheControlToMessages(
     return;
   }
 
-  let fallbackToolResult: Record<string, unknown> | undefined;
+  // Reserve the trailing tool result's slot before spending any marker on
+  // user turns: it anchors the growing tool-loop prefix, so spare history
+  // checkpoints must never starve it (issue #147168).
+  const fallbackToolResult = findTrailingToolResult(messages, cacheBreakpointOptOutMessageIndexes);
+  if (fallbackToolResult) {
+    if (markerLimit === 1) {
+      // A single marker caches the longer-lived tool-output prefix instead
+      // of the newest (and most volatile) user turn.
+      fallbackToolResult.cache_control = cacheControl;
+      return;
+    }
+    fallbackToolResult.cache_control = cacheControl;
+  }
+
+  const historyMarkerLimit = fallbackToolResult ? markerLimit - 1 : markerLimit;
   let markersPlaced = 0;
 
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -346,13 +394,7 @@ function applyAnthropicCacheControlToMessages(
 
     const content = record.content;
     if (typeof content === "string") {
-      if (markersPlaced === 0 && fallbackToolResult && markerLimit === 1) {
-        // A single marker caches the longer-lived tool-output prefix instead
-        // of the newest (and most volatile) user turn.
-        fallbackToolResult.cache_control = cacheControl;
-        return;
-      }
-      if (markersPlaced < markerLimit) {
+      if (markersPlaced < historyMarkerLimit) {
         record.content = [
           {
             type: "text",
@@ -377,29 +419,17 @@ function applyAnthropicCacheControlToMessages(
 
       const blockRecord = block as Record<string, unknown>;
       if (blockRecord.type === "text" || blockRecord.type === "image") {
-        if (markersPlaced === 0 && fallbackToolResult && markerLimit === 1) {
-          // A single marker caches the longer-lived tool-output prefix.
-          fallbackToolResult.cache_control = cacheControl;
-          return;
-        }
-        if (markersPlaced < markerLimit) {
+        if (markersPlaced < historyMarkerLimit) {
           blockRecord.cache_control = cacheControl;
           markersPlaced += 1;
         }
         break;
       }
-      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
-        fallbackToolResult = blockRecord;
-      }
     }
 
-    if (markersPlaced >= markerLimit) {
+    if (markersPlaced >= historyMarkerLimit) {
       break;
     }
-  }
-
-  if (fallbackToolResult && markersPlaced < markerLimit) {
-    fallbackToolResult.cache_control = cacheControl;
   }
 }
 
