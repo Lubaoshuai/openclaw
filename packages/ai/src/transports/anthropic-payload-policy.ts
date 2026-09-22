@@ -330,6 +330,7 @@ function findTrailingToolResult(
       continue;
     }
 
+    // SAFETY: typeof check above guarantees a plain object record.
     const record = message as Record<string, unknown>;
     if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
       continue;
@@ -344,8 +345,10 @@ function findTrailingToolResult(
       if (
         block &&
         typeof block === "object" &&
+        // SAFETY: typeof check above guarantees a plain object block.
         (block as Record<string, unknown>).type === "tool_result"
       ) {
+        // SAFETY: same object narrowed to a mutable record for marker writes.
         return block as Record<string, unknown>;
       }
     }
